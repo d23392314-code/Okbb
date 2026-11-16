@@ -38,65 +38,49 @@ jobs:
       - name: Compile firmware
         run: |
           arduino-cli compile \
-            --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=huge_app,PSRAM=opi,CPUFreq=240,DebugLevel=none" \
+            --fqbn "esp32:esp32:esp32s3:CDCOnBoot=default,FlashSize=16M,PartitionScheme=huge_app,PSRAM=opi,CPUFreq=240,DebugLevel=none" \
             --output-dir ./build \
             --warnings default \
             DEWZX_VOICE_AI/
 
-      - name: Generate flash info & merged binary
+      - name: Generate merged binary (5MB+)
         run: |
-          cd build
+          pip install esptool --quiet
 
-          # Rename agar lebih mudah dibaca
-          cp DEWZX_VOICE_AI.ino.bootloader.bin  bootloader.bin   || true
-          cp DEWZX_VOICE_AI.ino.partitions.bin  partitions.bin   || true
-          cp DEWZX_VOICE_AI.ino.bin              firmware.bin     || true
+          cp build/DEWZX_VOICE_AI.ino.bootloader.bin build/bootloader.bin
+          cp build/DEWZX_VOICE_AI.ino.partitions.bin build/partitions.bin
+          cp build/DEWZX_VOICE_AI.ino.bin            build/firmware.bin
 
-          # Buat merged binary (1 file, flash ke 0x0)
+          # Merge jadi 1 file, flash ke 0x0
           esptool.py --chip esp32s3 merge_bin \
-            -o merged.bin \
+            -o build/DEWZX_merged.bin \
             --flash_mode dio \
             --flash_freq 80m \
             --flash_size 16MB \
-            0x0     bootloader.bin \
-            0x8000  partitions.bin \
-            0x10000 firmware.bin  || echo "merge_bin skip (esptool not found)"
+            0x0     build/bootloader.bin \
+            0x8000  build/partitions.bin \
+            0x10000 build/firmware.bin
 
-          # Buat file petunjuk flash
-          cat > CARA_FLASH.txt << 'EOF'
-          ════════════════════════════════════════
-           DEWZX VOICE AI — Panduan Flash
-          ════════════════════════════════════════
-
-          PILIHAN 1 — Flash 3 file terpisah (LEBIH STABIL, pakai ini)
-          ─────────────────────────────────────────
-          File              Alamat
-          bootloader.bin    0x0000
-          partitions.bin    0x8000
-          firmware.bin      0x10000
-
-          PILIHAN 2 — Flash 1 file sekaligus
-          ─────────────────────────────────────────
-          File              Alamat
-          merged.bin        0x0000
-
-          CATATAN:
-          - Chip: ESP32-S3, Flash 16MB, PSRAM 8MB OPI
-          - Baud rate saat flash: pakai 115200 jika sering gagal
-          - Pastikan ESP32-S3 dalam mode bootloader (tekan BOOT lalu RESET)
-          EOF
-
-          ls -lh *.bin CARA_FLASH.txt
+          # Pad sampai minimal 5MB dengan 0xFF (nilai flash kosong)
+          python3 - << 'PY'
+          import os
+          path = "build/DEWZX_merged.bin"
+          target = 5 * 1024 * 1024
+          size = os.path.getsize(path)
+          if size < target:
+              with open(path, "ab") as f:
+                  f.write(b"\xff" * (target - size))
+          print(f"DEWZX_merged.bin final size: {os.path.getsize(path):,} bytes")
+          PY
 
       - name: Upload firmware as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DEWZX-firmware-${{ github.sha }}
+          name: DEWZX-firmware
           path: |
+            build/DEWZX_merged.bin
             build/bootloader.bin
             build/partitions.bin
             build/firmware.bin
-            build/merged.bin
-            build/CARA_FLASH.txt
           retention-days: 30
 
